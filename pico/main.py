@@ -40,7 +40,8 @@ def clip_u16(value):
 def setup_pwm():
     global pwm 
     pwm = PWM(Pin(14))
-    pwm.freq(5000)
+    pwm.freq(5000)    
+    pwm.duty_u16(clip_u16(255**2 * brightness))  
     
 
 def parse_request(request):
