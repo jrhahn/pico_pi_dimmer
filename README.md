@@ -33,3 +33,6 @@ curl -X POST <PICO_IP_ADDRESS>/set_brightness \
      -H "Content-Type: application/x-www-form-urlencoded" \ 
      -d "brightness=<BRIGHTNESS_VALUE>"
 ``` 
+
+## Application
+A flutter-based client app that is able to control the light dimmer can be found here: [https://github.com/jrhahn/flutter_light_control](https://github.com/jrhahn/flutter_light_control)
