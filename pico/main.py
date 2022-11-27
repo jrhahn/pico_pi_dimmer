@@ -43,7 +43,7 @@ def endpoint_set_brightness(method, url, data=None):
 def endpoint_get_brightness(methods=None, url=None, data=None):
     global brightness
     
-    return f"{{ brightness: {brightness} }}"
+    return f'{{ "brightness": {brightness} }}'
 
 
 def start_wifi(wifi_ssid=WIFI_SSID, wifi_pass=WIFI_PASS):
