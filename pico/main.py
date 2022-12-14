@@ -1,10 +1,8 @@
 import network
-import socket
 import time
 
 from machine import Pin
 import uasyncio as asyncio
-from machine import Pin, PWM
 
 
 """    
@@ -13,8 +11,8 @@ curl -X POST 192.168.178.36/set_brightness/brightness=<BRIGHTNESS_VALUE>
 with 0.0 <= BRIGHTNESS_VALUE <= 1.0
 """
 
-WIFI_SSID = "<to be set>"
-WIFI_PASS = "<to be set>"
+WIFI_SSID = "FRITZ!Box 6690 NW"
+WIFI_PASS = "57433726856370259000"
 
 brightness = 0.125
 
