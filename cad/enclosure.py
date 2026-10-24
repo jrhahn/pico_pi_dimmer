@@ -1,7 +1,8 @@
 """Enclosure v1 for the v3 dimmer: Pico + Pimoroni Wireless Pack, MOSFET
 module and 24 V -> 5 V buck converter in one 60 x 25 x 47 mm box. The lid is
 one of the two big 60 x 47 faces. Both cables (24 V in, LED strip out) leave
-through the same end face.
+through one slot in an end face. The slot is open at the rim, so cables with
+their plugs on go in from above; the lid closes it.
 
 Two parts, both print without support:
 
@@ -14,9 +15,9 @@ Layout, looking into the open body:
     The Pico + pack stack lies flat on the floor, 5.5 mm off one long wall so
     the bosses clear it. The buck converter stands on edge in that gap, the
     MOSFET module on edge along the other side of the stack. Wire the module
-    before it goes in: on edge, its terminal screws face sideways. The two
-    cable holes face the module's end. Cinch a cable tie round each cable
-    inside the wall as strain relief.
+    before it goes in: on edge, its terminal screws face sideways. The cable
+    slot faces the module's end. Cinch a cable tie round each cable inside
+    the wall as strain relief.
 
 Modelled lid side up: x along the box, y across the lid, z through the lid.
 
@@ -42,8 +43,7 @@ INSERT_L = 5.7  # insert length; the hole is 1 mm deeper for the screw tip
 SCREW_D = 2.9  # clearance hole in the lid
 SCREW_L = 6.0  # M2.5 x 6, pan or socket head
 
-CABLE_D = 5.5  # cable hole diameter: the cable's outside + ~0.5
-CABLE_WEB = 2.0  # wall left between the two holes
+CABLE_D = 5.5  # cable slot width: the thicker cable's outside + ~0.5
 
 # What has to fit (mm). STACK is the Pico + pack sandwich, plugged together,
 # from the pack's top components to the Pico's -- measure yours.
@@ -70,17 +70,18 @@ CORNERS = [(sx * BOSS_X, sy * BOSS_Y) for sx in (-1, 1) for sy in (-1, 1)]
 GAP = BOSS_REACH + 0.5
 PACK_EDGE = -IN_W / 2 + GAP + PACK_W  # the stack's side towards the module
 
-# Cable holes in the end wall, between the stack and the bosses.
-HOLE_Y = (PACK_EDGE + IN_W / 2 - BOSS_REACH) / 2
-HOLES_Z = (BODY_H / 2 - (CABLE_D + CABLE_WEB) / 2, BODY_H / 2 + (CABLE_D + CABLE_WEB) / 2)
+# Cable slot in the end wall, between the stack and the bosses. Just deep
+# enough for the two cables on top of each other, so the lid holds them.
+SLOT_Y = (PACK_EDGE + IN_W / 2 - BOSS_REACH) / 2
+SLOT_BOTTOM = BODY_H - 2 * CABLE_D
 
 assert IN_L >= PACK_L + 1 and IN_H >= STACK + 1, "board stack does not fit"
 assert IN_W >= GAP + PACK_W + 0.5 + MOSFET[2], "no room across the box for the MOSFET module"
 assert GAP >= BUCK[2] + 1, "no room beside the stack for the buck"
 assert 2 * (BOSS_X - BOSS_R) >= max(MOSFET[0], BUCK[0]) + 1, "modules do not fit between the bosses"
 assert IN_H >= max(MOSFET[1], BUCK[1]) + 1, "modules do not fit on edge"
-assert IN_W / 2 - BOSS_REACH - PACK_EDGE >= CABLE_D + 1, "no room for the cable holes"
-assert HOLES_Z[0] - CABLE_D / 2 >= WALL + 1 and HOLES_Z[1] + CABLE_D / 2 <= BODY_H - 1, "cable holes too big"
+assert IN_W / 2 - BOSS_REACH - PACK_EDGE >= CABLE_D + 1, "no room for the cable slot"
+assert SLOT_BOTTOM >= WALL + 1, "cables too thick for the slot"
 assert SCREW_L - LID <= INSERT_L + 1, "screws too long for the insert holes"
 
 
@@ -104,13 +105,13 @@ inserts = (
     .circle(INSERT_D / 2)
     .extrude(INSERT_L + 1)
 )
-holes = (
+slot = (
     cq.Workplane("YZ", origin=(-L / 2 - 1, 0, 0))
-    .pushPoints([(HOLE_Y, z) for z in HOLES_Z])
-    .circle(CABLE_D / 2)
+    .center(SLOT_Y, SLOT_BOTTOM + CABLE_D + 1)
+    .slot2D(2 * CABLE_D + 2, CABLE_D, 90)  # round bottom, top end past the rim
     .extrude(WALL + 2)
 )
-body = body.cut(inserts).cut(holes)
+body = body.cut(inserts).cut(slot)
 
 lid = (
     cq.Workplane("XY")
@@ -131,5 +132,5 @@ for name, part in {"body": body, "lid": lid}.items():
 
 print(
     f"inside {IN_L:.1f} x {IN_W:.1f} x {IN_H:.1f} mm, "
-    f"stack {GAP:.1f} mm off the wall, cable holes {HOLES_Z[0]:.1f} and {HOLES_Z[1]:.1f} mm above the bed"
+    f"stack {GAP:.1f} mm off the wall, cable slot down to {SLOT_BOTTOM:.1f} mm above the bed"
 )
