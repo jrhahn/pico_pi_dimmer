@@ -1,49 +1,107 @@
-# Dimmer for LED Stripes
-This will set up a simple REST service on your Pi Pico that allows to set the brightness value remotely. Internally, 
-the PWM output will be scaled by the brightness value. Note that, the brightness should be in the range from 0.0 to 1.0.
+# Dimmer for LED strips
 
-There are two version of this project:
-1. The first version requires the [Pimoroni Wireless Pack](https://shop.pimoroni.com/products/pico-wireless-pack?variant=32369508581459). This is because originally the Pi Pico was not equipped with a Wifi module.
-2. The second version requires a Pi Pico with a Wifi module. 
+A Raspberry Pi Pico with the [Pimoroni Pico Wireless Pack](https://shop.pimoroni.com/products/pico-wireless-pack)
+dims a 24 V LED strip through a MOSFET module and shows up in Home Assistant as a dimmable light, over MQTT
+discovery. Firmware in async `no_std` Rust ([Embassy](https://embassy.dev)), toolchain via a Nix flake, and a
+printable enclosure.
 
-## Version 1: Pi Pico with [Pimoroni Wireless Pack](https://shop.pimoroni.com/products/pico-wireless-pack?variant=32369508581459)
+Version 3, tested on the hardware below with Home Assistant. The MicroPython REST versions (v1 with the Wireless
+Pack, v2 for the Pico W) are in the git history.
 
-### Hardware requirements
-A Raspberry Pi Pico is required which needs to be attached to a [Pimoroni Wireless Pack](https://shop.pimoroni.com/products/pico-wireless-pack?variant=32369508581459).
+## Hardware
 
-Further, I use the PWM of GPIO Pin 14 and connect it to an [amplifier](https://www.amazon.de/gp/product/B07VRCXGFY/ref=ppx_yo_dt_b_asin_title_o03_s00?ie=UTF8&psc=1). 
-Make sure to connect GND of GPIO Pin 14 (Pin 18 on the Pi) to GND of the amplifier. 
-Obviously, GPIO Pin 14 (Pin 19 on the Pi) needs to be connected to V+ of the amplifier.
-The LED stripes need to be connected to the amplifier (power supply to input, LED stripes to the output).
+- Raspberry Pi Pico + Pimoroni Pico Wireless Pack. The pack's ESP32 runs the NINA firmware it ships with
+  (tested: 1.7.3); the Pico talks to it over SPI.
+- Dual-MOSFET trigger module, 5–36 V / 15 A, PWM up to 20 kHz
+- 24 V → 5 V buck converter (Mini-360 or MP1584)
+- 24 V LED strip and power supply
 
-I used these [LED stripes](https://www.amazon.de/Pflanzenlampe-Samsung%EF%BC%86Full-Helligkeitsstufe-pflanzenlicht-Zimmerpflanzen/dp/B088QVN89Q/ref=sr_1_5?crid=2IQNDREOYV7LG&keywords=led+pflanzenlampe&qid=1657228824&sprefix=led+pfl%2Caps%2C148&sr=8-5).
-The power supply output is 24V. 
+| From | To |
+| --- | --- |
+| PSU +24 V | MOSFET VIN+, buck IN+ |
+| PSU GND | MOSFET VIN−, buck IN− |
+| buck OUT+ (**set to 5.0 V before connecting**) | Pico VSYS (pin 39) |
+| buck OUT− | Pico GND (pin 38) |
+| Pico GP14 (pin 19) | MOSFET trigger/PWM + |
+| Pico GND (pin 18) | MOSFET trigger/PWM − |
+| MOSFET OUT+ / OUT− | LED strip + / − |
 
-### Setup
-1. Install [pimoroni-pico-v1.18.7-micropython.uf2](https://github.com/pimoroni/pimoroni-pico/releases/tag/v1.18.7) on your Pi Pico.
-2. Save [ppwhttp.py](https://github.com/pimoroni/pimoroni-pico/tree/main/micropython/examples/pico_wireless) on your Pi Pico. 
-3. Adapt ```WIFI_SSID``` and ```WIFI_PASS``` in secrets.py and also upload this file to your Pi Pico.
+VSYS takes at most 5.5 V. To have USB plugged in while the 24 V supply is on, put a Schottky diode
+(e.g. 1N5819) in the buck's OUT+ line so USB cannot feed the converter backwards.
 
-Note: As of today v1.19.x is already available. However, that version contains breaking changes and the examples including the rest server haven't been updated yet.
-
-## Version 2: Pi Pico with Wifi onboard
-
-### Hardware requirements
-Since the Wifi module is integrated on the Pi Pico, there is no need to wire an additional board. Still, the amplifier must be connected as described in the section above.
-
-## Usage
-### Option 1: Browser-based
-Simply enter the IP address of the Pico in your web browser. A simple website should appear that allows you
-to enter a brightness value. As soon as you click on enter you should see the effect on your LED stripes.
-
-### Option 2: REST call
-Simply use e.g. curl on the terminal to send a REST request. Replace ```<PICO_IP_ADDRESS>``` by the Pico's IP address and ```<BRIGHTNESS_VALUE>``` by a value between 0.0 and 1.0.
+## Build and flash
 
 ```bash
-curl -X POST <PICO_IP_ADDRESS>/set_brightness \ 
-     -H "Content-Type: application/x-www-form-urlencoded" \ 
-     -d "brightness=<BRIGHTNESS_VALUE>"
-``` 
+cp .env.example .env     # Wi-Fi and broker; direnv loads it
+direnv allow             # or: nix develop
+cargo run --release      # Pico in BOOTSEL mode: hold the button while plugging it in
+```
 
-## Application
-A flutter-based client app that is able to control the light dimmer can be found here: [https://github.com/jrhahn/flutter_light_control](https://github.com/jrhahn/flutter_light_control)
+The settings in `.env` are compiled into the firmware. After changing one, flash again.
+
+| Variable | Meaning |
+| --- | --- |
+| `SSID`, `PASSWORD` | Wi-Fi, 2.4 GHz only |
+| `MQTT_BROKER` | broker host name or IPv4 address, port 1883 |
+| `MQTT_USER`, `MQTT_PASSWORD` | optional, leave unset for an anonymous broker |
+| `NODE_ID` | topic level and MQTT client id, one per dimmer; default `dimmer`, 1–32 of `a-z 0-9 - _` |
+| `NODE_NAME` | device name in Home Assistant; default `Dimmer`, at most 48 bytes, no `"` or `\` |
+
+Once the dimmer firmware runs, no button is needed any more: writing `bootsel` to its USB serial port reboots it
+into the bootloader.
+
+```bash
+echo bootsel > /dev/serial/by-id/usb-Embassy_USB-serial_logger-if00
+cargo run --release
+```
+
+The same port carries the log (`screen /dev/serial/by-id/usb-Embassy_USB-serial_logger-if00`).
+
+Unit tests (MQTT and NINA framing, light, discovery payload) run on the host:
+
+```bash
+cargo test --lib --target x86_64-unknown-linux-gnu
+```
+
+## Home Assistant
+
+Needs the MQTT integration with discovery on (the default). The dimmer announces itself as a device named
+`NODE_NAME` with one light entity: on/off and brightness. No YAML. It shows up under Settings → Devices & services
+→ MQTT.
+
+| Topic | Payload |
+| --- | --- |
+| `homeassistant/light/<NODE_ID>/enabled/config` | discovery, retained |
+| `smarthome/<NODE_ID>/config/enabled` | `ON` / `OFF`, retained |
+| `smarthome/<NODE_ID>/config/brightness` | `0`–`255`, retained |
+| `smarthome/<NODE_ID>/status` | `online` / `offline` (last will), retained |
+
+Home Assistant publishes its commands retained and reads them back as the state, so the broker remembers the
+light across a power cut and the dimmer restores it on connect. Until then the strip runs at 12.5 % duty, as v1
+always did. Brightness maps to duty squared, so the slider looks even to the eye.
+
+If Wi-Fi or the broker goes away, the Pico resets the ESP32 and connects again. After the broker drops the
+connection, the dimmer is back within about 20 seconds. A hardware watchdog (8 s) and reboot-on-panic cover
+everything else.
+
+Two quirks of nina-fw 1.7.3 shape the code. Its host-name connect is broken, so the dimmer resolves
+`MQTT_BROKER` first and connects by address. And it reports a connection the broker closed as still open, so the
+dimmer pings every 5 s and starts over after three unanswered pings.
+
+## Enclosure v1
+
+60 × 25 × 45 mm. Both cables (24 V in, LED strip out) leave through the same end face. Two parts, both print
+without support: the body floor down, the lid plate down. STL and STEP are in [`cad/export`](cad/export).
+
+- The Wireless Pack is 53 × 25 mm, wider than the 21.8 mm inside, so the Pico + pack stack stands on its long
+  edge. The stack must be at most ~20.8 mm thick; measure yours.
+- The MOSFET module and the buck converter go on the underside of the lid (double-sided foam tape), beside
+  the two cable holes.
+- Cinch a cable tie round each cable inside the wall as strain relief.
+- The lid press-fits. Tune `FIT` in [`cad/enclosure.py`](cad/enclosure.py) for your printer, and `CABLE_D` for
+  your cables.
+
+```bash
+nix develop .#cad
+python cad/enclosure.py      # rewrites cad/export/
+```
