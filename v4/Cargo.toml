@@ -1,0 +1,41 @@
+[package]
+name = "pico-dimmer"
+version = "4.0.0"
+edition = "2024"
+authors = ["Jürgen Hahn"]
+description = "Raspberry Pi Pico W LED dimmer, a Home Assistant light over MQTT"
+
+[[bin]]
+name = "pico-dimmer"
+test = false
+bench = false
+
+# The library is the pure part (MQTT framing, the light) and has no
+# dependencies, so it builds and tests on the host:
+#   cargo test --lib --target x86_64-unknown-linux-gnu
+# Everything chip-specific is only pulled in for the Pico.
+[target.'cfg(target_os = "none")'.dependencies]
+embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread"] }
+embassy-time = "0.5.1"
+embassy-rp = { version = "0.10.0", features = ["rp2040", "time-driver", "critical-section-impl"] }
+embassy-usb-logger = "0.6.0"
+embassy-net = { version = "0.9.1", features = ["tcp", "dhcpv4", "dns", "proto-ipv4", "medium-ethernet"] }
+cyw43 = "0.7.0"
+cyw43-pio = "0.10.0"
+static_cell = "2.1.1"
+# Compare-and-swap for static_cell on the M0+, through embassy-rp's critical section.
+portable-atomic = { version = "1", features = ["critical-section"] }
+cortex-m-rt = "0.7.5"
+# A panic reboots the board instead of parking it with the strip stuck.
+panic-reset = "0.1.1"
+heapless = "0.9"
+log = "0.4"
+
+[target.'cfg(not(target_os = "none"))'.dev-dependencies]
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = 2
