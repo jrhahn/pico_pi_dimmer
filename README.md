@@ -90,21 +90,18 @@ dimmer pings every 5 s and starts over after three unanswered pings.
 
 ## Enclosure v1
 
-60 × 25 × 47 mm, the lid on one of the two big sides. Both cables (24 V in, LED strip out) leave through one slot
-in an end face. The slot is open at the rim, so cables with their plugs on go in from above; the lid closes it.
-Two parts, both print without support: the body floor down, the lid plate down. STL and STEP are in
+80 × 67 × 45 mm, the lid on top. Both cables (24 V in, LED strip out) leave through slots in the same end face.
+The slots are open at the rim, so cables with their plugs on go in from above; the lid closes them. Two parts,
+both print without support: the body floor down, the lid plate down. STL and STEP are in
 [`cad/export`](cad/export).
 
 - Four M2.5 × 6 screws (pan or socket head) hold the lid. They go into M2.5 heat-set inserts, which you melt
   into the bosses in the body's corners. The holes are 4.0 mm wide and 6.7 mm deep, for ruthex M2.5×5.7 or CNC
   Kitchen M2.5×4. For other inserts, set `INSERT_D` and `INSERT_L` in [`cad/enclosure.py`](cad/enclosure.py).
-- The Pico + pack stack lies flat on the floor, 5.5 mm away from one long wall so the bosses clear it. The stack
-  must be at most ~20.8 mm thick; measure yours.
-- The buck converter stands on edge in that gap, the MOSFET module on edge along the other side of the stack,
-  its end towards the cable slot. Both sit on double-sided foam tape. Wire the module before it goes in: on
-  edge, its terminal screws face sideways.
+- Everything lies flat on the floor, on double-sided foam tape: the Pico + pack stack, the MOSFET module with
+  its terminals up, and the buck converter. Keep the corners free for the bosses.
 - Cinch a cable tie round each cable inside the wall as strain relief. Set `CABLE_D` to your thicker cable +
-  0.5 mm; the slot holds two of them on top of each other.
+  0.5 mm.
 
 ```bash
 nix develop .#cad
