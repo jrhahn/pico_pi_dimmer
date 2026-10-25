@@ -26,7 +26,8 @@
         # `cargo run --release` builds and copies the image onto a Pico W in
         # BOOTSEL mode.
         devShells.default = pkgs.mkShell {
-          packages = [ rustToolchain pkgs.elf2uf2-rs ];
+          # python3, openssl and mosquitto for ota.py.
+          packages = [ rustToolchain pkgs.elf2uf2-rs pkgs.python3 pkgs.openssl pkgs.mosquitto ];
         };
       });
 }

@@ -17,12 +17,19 @@ bench = false
 [target.'cfg(target_os = "none")'.dependencies]
 embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread"] }
 embassy-time = "0.5.1"
-embassy-rp = { version = "0.10.0", features = ["rp2040", "time-driver", "critical-section-impl"] }
+# boot2-none: boot2 lives with the bootloader, see memory.x.
+embassy-rp = { version = "0.10.0", features = ["rp2040", "time-driver", "critical-section-impl", "boot2-none"] }
 embassy-usb-logger = "0.6.0"
 embassy-net = { version = "0.9.1", features = ["tcp", "dhcpv4", "dns", "proto-ipv4", "medium-ethernet"] }
 cyw43 = "0.7.0"
 cyw43-pio = "0.10.0"
 static_cell = "2.1.1"
+embassy-sync = "0.8.0"
+embassy-boot-rp = "0.10.0"
+# Updates are only accepted with a valid ed25519 signature.
+embassy-boot = { version = "0.7.0", features = ["ed25519-salty"] }
+embassy-embedded-hal = "0.6.0"
+cortex-m = "0.7.7"
 # Compare-and-swap for static_cell on the M0+, through embassy-rp's critical section.
 portable-atomic = { version = "1", features = ["critical-section"] }
 cortex-m-rt = "0.7.5"
