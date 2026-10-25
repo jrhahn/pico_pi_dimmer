@@ -9,16 +9,23 @@
 #![no_std]
 #![no_main]
 
+use core::cell::RefCell;
 use core::fmt::Write as _;
 
+use embassy_boot_rp::{AlignedBuffer, BlockingFirmwareUpdater, FirmwareUpdaterConfig, State};
+use embassy_embedded_hal::flash::partition::BlockingPartition;
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
+use embassy_rp::flash::{Blocking as FlashBlocking, Flash};
 use embassy_rp::gpio::{Flex, Input, Level, Output, Pull};
-use embassy_rp::peripherals::{SPI0, USB};
+use embassy_rp::peripherals::{FLASH, SPI0, USB};
 use embassy_rp::pwm::{self, Pwm};
 use embassy_rp::spi::{self, Blocking, Spi};
 use embassy_rp::usb::{self, Driver};
 use embassy_rp::watchdog::Watchdog;
+use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use embassy_usb_logger::ReceiverHandler;
 use heapless::String;
@@ -26,7 +33,7 @@ use log::{info, warn};
 use panic_reset as _;
 
 use pico_dimmer::nina::{self, Param::Long, Param::Short};
-use pico_dimmer::{Light, mqtt};
+use pico_dimmer::{Command, Fade, Light, Ota, duty, http_body, mqtt};
 
 const SSID: &str = env!("SSID");
 const PASSWORD: &str = env!("PASSWORD");
@@ -48,6 +55,16 @@ const _: () = assert!(
     "NODE_NAME: at most 48 bytes, no quotes or backslashes"
 );
 
+/// Key that signs updates (see ota.py); without it the dimmer takes none.
+const OTA_KEY: Option<[u8; 32]> = match non_empty(option_env!("OTA_PUBLIC_KEY")) {
+    Some(key) => match pico_dimmer::hex(key) {
+        Some(key) => Some(key),
+        None => panic!("OTA_PUBLIC_KEY: 64 hex digits"),
+    },
+    None => None,
+};
+const FLASH_SIZE: usize = 2 * 1024 * 1024;
+
 /// PWM frequency, as v1. The MOSFET module is rated to 20 kHz.
 const PWM_HZ: u32 = 5_000;
 const KEEP_ALIVE_SECS: u16 = 30;
@@ -56,6 +73,13 @@ const KEEP_ALIVE_SECS: u16 = 30;
 /// after the broker's reset fails, so this is how a broker restart shows.
 const PING: Duration = Duration::from_secs(5);
 const WATCHDOG: Duration = Duration::from_secs(8);
+
+type Partition<'a> =
+    BlockingPartition<'a, NoopRawMutex, Flash<'static, FLASH, FlashBlocking, FLASH_SIZE>>;
+type Updater<'a> = BlockingFirmwareUpdater<'a, Partition<'a>, Partition<'a>>;
+
+/// Where the strip should go (fine level, see `Light::target`) and in how many ms.
+static TARGET: Signal<CriticalSectionRawMutex, (u32, u32)> = Signal::new();
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<USB>;
@@ -82,6 +106,38 @@ impl ReceiverHandler for Bootsel {
     }
 }
 
+/// Moves the strip to each new target, fading in 20 ms steps.
+#[embassy_executor::task]
+async fn strip(mut pwm: Pwm<'static>, mut config: pwm::Config) {
+    let full = config.top as u32 + 1;
+    let mut fade = Fade {
+        from: 0,
+        to: 0,
+        ms: 0,
+    };
+    let mut started = Instant::now();
+    loop {
+        let elapsed = started.elapsed().as_millis().min(u32::MAX as u64) as u32;
+        let level = fade.at(elapsed);
+        config.compare_a = duty(level, full) as u16;
+        pwm.set_config(&config);
+        let (to, ms) = if elapsed >= fade.ms {
+            TARGET.wait().await
+        } else {
+            match with_timeout(Duration::from_millis(20), TARGET.wait()).await {
+                Ok(next) => next,
+                Err(_) => continue,
+            }
+        };
+        fade = Fade {
+            from: level,
+            to,
+            ms,
+        };
+        started = Instant::now();
+    }
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
@@ -90,11 +146,19 @@ async fn main(spawner: Spawner) {
     let mut light = Light::BOOT;
     let mut config = pwm::Config::default();
     config.top = (embassy_rp::clocks::clk_sys_freq() / PWM_HZ - 1) as u16;
-    let mut strip = Strip {
-        pwm: Pwm::new_output_a(p.PWM_SLICE7, p.PIN_14, config.clone()),
-        config,
-    };
-    strip.show(&light);
+    let pwm = Pwm::new_output_a(p.PWM_SLICE7, p.PIN_14, config.clone());
+    spawner.spawn(strip(pwm, config).unwrap());
+    TARGET.signal((light.target(), 0));
+    // Set once the retained state or a command has arrived; later echoes of
+    // our own state are ignored.
+    let mut restored = false;
+
+    let flash = Mutex::new(RefCell::new(Flash::new_blocking(p.FLASH)));
+    let mut aligned = AlignedBuffer([0; 1]);
+    let mut updater = BlockingFirmwareUpdater::new(
+        FirmwareUpdaterConfig::from_linkerfile_blocking(&flash, &flash),
+        &mut aligned.0,
+    );
 
     let mut watchdog = Watchdog::new(p.WATCHDOG);
     watchdog.start(WATCHDOG);
@@ -114,14 +178,19 @@ async fn main(spawner: Spawner) {
 
     loop {
         esp.reset().await;
-        if let Err(e) = run(&mut esp, &mut light, &mut strip).await {
+        if let Err(e) = run(&mut esp, &mut light, &mut restored, &mut updater).await {
             warn!("{e}; resetting the ESP32");
         }
         Timer::after_secs(2).await;
     }
 }
 
-async fn run(esp: &mut Esp, light: &mut Light, strip: &mut Strip) -> Result<(), &'static str> {
+async fn run(
+    esp: &mut Esp,
+    light: &mut Light,
+    restored: &mut bool,
+    updater: &mut Updater<'_>,
+) -> Result<(), &'static str> {
     let version = esp.command(nina::GET_FW_VERSION, &[], false).await?;
     info!(
         "ESP32 firmware {}",
@@ -162,13 +231,53 @@ async fn run(esp: &mut Esp, light: &mut Light, strip: &mut Strip) -> Result<(), 
                 mqtt::Packet::ConnAck(0) => {
                     accepted = true;
                     announce(esp, sock, &mut tx).await?;
+                    if *restored {
+                        publish_state(esp, sock, &mut tx, light).await?;
+                    }
                     info!("MQTT up as smarthome/{NODE_ID}");
+                    confirm(updater);
                 }
                 mqtt::Packet::ConnAck(_) => return Err("broker refused the connection"),
+                mqtt::Packet::Publish {
+                    topic: name,
+                    payload,
+                } if name.ends_with("/ota") => {
+                    let result = match Ota::parse(payload) {
+                        Some(order) => download(esp, &order, updater).await,
+                        None => Err("bad OTA order"),
+                    };
+                    let report = match result {
+                        Ok(()) => "verified, restarting",
+                        Err(e) => e,
+                    };
+                    info!("OTA: {report}");
+                    let n = mqtt::publish(&mut tx, &topic("ota/result"), report.as_bytes(), false)
+                        .ok_or("topic too long")?;
+                    esp.send(sock, &tx[..n]).await?;
+                    match result {
+                        Ok(()) => {
+                            Timer::after_millis(500).await;
+                            cortex_m::peripheral::SCB::sys_reset();
+                        }
+                        // The download socket may still be open; start clean.
+                        Err(_) => return Err("OTA failed"),
+                    }
+                }
                 mqtt::Packet::Publish { topic, payload } => {
-                    light.handle(topic, payload);
-                    strip.show(light);
-                    info!("on={} level={}", light.on, light.level);
+                    let own_state = topic.ends_with("/state");
+                    if let Some(command) =
+                        Command::parse(payload).filter(|_| !(own_state && *restored))
+                    {
+                        light.apply(&command);
+                        // The restored state applies at once; commands fade.
+                        let ms = if own_state { 0 } else { command.fade_ms };
+                        TARGET.signal((light.target(), ms));
+                        *restored = true;
+                        if !own_state {
+                            publish_state(esp, sock, &mut tx, light).await?;
+                        }
+                        info!("on={} level={} fade={}ms", light.on, light.level, ms);
+                    }
                 }
                 mqtt::Packet::Other => {}
             }
@@ -194,7 +303,8 @@ async fn run(esp: &mut Esp, light: &mut Light, strip: &mut Strip) -> Result<(), 
     }
 }
 
-/// Discovery, availability and the two command subscriptions, after CONNACK.
+/// Discovery, availability, and the subscriptions to our retained state (read
+/// once after a restart), the commands and update orders, after CONNACK.
 async fn announce(esp: &mut Esp, sock: u8, tx: &mut [u8]) -> Result<(), &'static str> {
     let mut config = String::<512>::new();
     pico_dimmer::discovery(&mut config, NODE_ID, NODE_NAME).map_err(|_| "discovery too long")?;
@@ -205,29 +315,112 @@ async fn announce(esp: &mut Esp, sock: u8, tx: &mut [u8]) -> Result<(), &'static
     esp.send(sock, &tx[..n]).await?;
     let n = mqtt::publish(tx, &topic("status"), b"online", true).ok_or("topic too long")?;
     esp.send(sock, &tx[..n]).await?;
-    for (id, key) in [(1, "config/enabled"), (2, "config/brightness")] {
+    for (id, key) in [(1, "state"), (2, "set"), (3, "ota")] {
         let n = mqtt::subscribe(tx, id, &topic(key)).ok_or("topic too long")?;
         esp.send(sock, &tx[..n]).await?;
     }
     Ok(())
 }
 
+async fn publish_state(
+    esp: &mut Esp,
+    sock: u8,
+    tx: &mut [u8],
+    light: &Light,
+) -> Result<(), &'static str> {
+    let mut state = String::<80>::new();
+    light.state(&mut state).map_err(|_| "state too long")?;
+    let n = mqtt::publish(tx, &topic("state"), state.as_bytes(), true).ok_or("topic too long")?;
+    esp.send(sock, &tx[..n]).await
+}
+
+/// After an update: the new firmware got as far as the broker, so keep it.
+/// Until then, any reset makes the bootloader swap the old one back.
+fn confirm(updater: &mut Updater) {
+    match updater.get_state() {
+        Ok(State::Boot) => {}
+        Ok(state) => {
+            let kept = updater.mark_booted().is_ok();
+            let what = if matches!(state, State::Swap) {
+                "update"
+            } else {
+                "rollback"
+            };
+            info!("{what} confirmed: {kept}");
+        }
+        Err(_) => warn!("bootloader state unreadable"),
+    }
+}
+
+/// Fetches the image through a second ESP32 socket into the download area and
+/// checks its signature; on success the bootloader swaps it in at the next
+/// reset. nina-fw cannot tell a closed connection from a quiet one, so the
+/// announced size says when the image is complete.
+async fn download(
+    esp: &mut Esp,
+    order: &Ota<'_>,
+    updater: &mut Updater<'_>,
+) -> Result<(), &'static str> {
+    let key = OTA_KEY.ok_or("no OTA_PUBLIC_KEY in this build")?;
+    info!(
+        "OTA: {} bytes from {}:{}{}",
+        order.size, order.host, order.port, order.path
+    );
+    let sock = esp.connect(order.host, order.port).await?;
+    let mut request = String::<300>::new();
+    order
+        .request(&mut request)
+        .map_err(|_| "update path too long")?;
+    esp.send(sock, request.as_bytes()).await?;
+
+    // Whole flash sectors at a time; the header is dropped from the front.
+    let size = order.size as usize;
+    let mut buf = AlignedBuffer([0u8; 4096]);
+    let (mut fill, mut written, mut in_body) = (0, 0, false);
+    let mut heard = Instant::now();
+    while written < size {
+        let n = esp.recv(sock, &mut buf.0[fill..]).await?;
+        if n == 0 {
+            if heard.elapsed() > Duration::from_secs(10) {
+                return Err("download stalled");
+            }
+            Timer::after_millis(20).await;
+            continue;
+        }
+        heard = Instant::now();
+        fill += n;
+        if !in_body {
+            match http_body(&buf.0[..fill]) {
+                Err(e) => return Err(e),
+                Ok(None) if fill == buf.0.len() => return Err("HTTP header too long"),
+                Ok(None) => continue,
+                Ok(Some(start)) => {
+                    buf.0.copy_within(start..fill, 0);
+                    fill -= start;
+                    in_body = true;
+                }
+            }
+        }
+        if written + fill > size {
+            return Err("image larger than announced");
+        }
+        if fill == buf.0.len() || written + fill == size {
+            updater
+                .write_firmware(written, &buf.0[..fill])
+                .map_err(|_| "flash write failed")?;
+            written += fill;
+            fill = 0;
+        }
+    }
+    updater
+        .verify_and_mark_updated(&key, &order.signature, order.size)
+        .map_err(|_| "signature does not match")
+}
+
 fn topic(key: &str) -> String<64> {
     let mut t = String::new();
     let _ = write!(t, "smarthome/{NODE_ID}/{key}");
     t
-}
-
-struct Strip {
-    pwm: Pwm<'static>,
-    config: pwm::Config,
-}
-
-impl Strip {
-    fn show(&mut self, light: &Light) {
-        self.config.compare_a = light.duty(self.config.top as u32 + 1) as u16;
-        self.pwm.set_config(&self.config);
-    }
 }
 
 /// The ESP32 on the Wireless Pack, spoken to as Pimoroni's and Arduino's
