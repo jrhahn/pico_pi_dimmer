@@ -1,2 +1,2 @@
-WIFI_SSID = ""
-WIFI_PASS = ""
+WIFI_SSID = "MyNetwork"
+WIFI_PASS = "s3cret"

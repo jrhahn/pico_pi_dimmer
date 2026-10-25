@@ -1,10 +1,12 @@
 # Dimmer for LED Stripes
-This will set up a simple REST service on your Pi Pico that allows to set the brightness value remotely. Internally, 
-the PWM output will be scaled by the brightness value. Note that, the brightness should be in the range from 0.0 to 1.0.
+A Raspberry Pi Pico dims LED stripes through a MOSFET amplifier. There are three versions of this project:
+1. [v1](v1) requires the [Pimoroni Wireless Pack](https://shop.pimoroni.com/products/pico-wireless-pack?variant=32369508581459). This is because originally the Pi Pico was not equipped with a Wifi module.
+2. [v2](v2) requires a Pi Pico with a Wifi module.
+3. [v3](v3) runs on the same hardware as v1, rewritten in Rust. It shows up in Home Assistant as a dimmable light
+   over MQTT and comes with a printable enclosure. See [v3/README.md](v3/README.md).
 
-There are two version of this project:
-1. The first version requires the [Pimoroni Wireless Pack](https://shop.pimoroni.com/products/pico-wireless-pack?variant=32369508581459). This is because originally the Pi Pico was not equipped with a Wifi module.
-2. The second version requires a Pi Pico with a Wifi module. 
+v1 and v2 set up a simple REST service on your Pi Pico that allows to set the brightness value remotely. Internally,
+the PWM output will be scaled by the brightness value. Note that, the brightness should be in the range from 0.0 to 1.0.
 
 ## Version 1: Pi Pico with [Pimoroni Wireless Pack](https://shop.pimoroni.com/products/pico-wireless-pack?variant=32369508581459)
 

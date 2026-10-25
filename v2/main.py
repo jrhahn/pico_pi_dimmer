@@ -11,8 +11,8 @@ curl -X POST 192.168.178.36/set_brightness/brightness=<BRIGHTNESS_VALUE>
 with 0.0 <= BRIGHTNESS_VALUE <= 1.0
 """
 
-WIFI_SSID = "<YOUR WIFI SSID>"
-WIFI_PASS = "<YOUR WIFI PASS>"
+WIFI_SSID = "MyNetwork"
+WIFI_PASS = "s3cret"
 
 brightness = 0.125
 

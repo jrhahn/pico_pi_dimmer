@@ -127,3 +127,8 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# v3
+.direnv/
+.venv-cad/
+result
